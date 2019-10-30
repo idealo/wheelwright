@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# The travis.yml file runs:
+# cat config.sh.template | envsubst > config.sh
+# envsubst fills environment variables into the template. This allows environment
+# from the travis.yml to be threaded through the build process to generate this
+# script.
+# The config.sh script allows us to overwrite these functions within the docker
+# container, thereby customizing the build for multibuild.
+
+function run_tests {
+    # Running tests not needed as we already tested it via Travis and Azure Pipeline
+    python --version
+    exit 0
+}
+
+function abspath {
+    python -c "import os.path; print(os.path.abspath('$1'))"
+}
+
+
+function pip_wheel_cmd {
+    local abs_wheelhouse=$1
+    local wheelhouse=$(abspath ${WHEEL_SDIR:-wheelhouse})
+    export MACOSX_DEPLOYMENT_TARGET="10.7"
+    python setup.py bdist_wheel
+    ls -lah .
+    ls dist/
+    ls ../
+    ls ../../
+    cp dist/*.whl ../wheelhouse/
+}
+
+
+# This is necessary because the Travis OSX environment is old.
+export MACOSX_DEPLOYMENT_TARGET="10.7"
