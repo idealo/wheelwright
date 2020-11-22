@@ -8,7 +8,7 @@
 # container, thereby customizing the build for multibuild.
 
 function run_tests {
-    # Running tests not needed as we already tested it via Travis and Azure Pipeline
+    # Running tests not needed as we already tested it via Azure Pipeline
     python --version
     exit 0
 }
