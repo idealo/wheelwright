@@ -1,0 +1,379 @@
+trigger:
+  branches:
+    include:
+    - branch-for-*
+pr: none
+
+variables:
+  # Name of the service connection set up in Azure Pipelines, used to upload
+  # release artifacts to GitHub. Set to false to disable.
+  GH_CONNECTION: wheelwright
+  REPO_DIR: checkout
+  ARTIFACT_NAME: artifacts
+  LINUX_TARGET: /io
+  BUILD_DEPENDS: "-Ur checkout/requirements.txt"
+  TEST_DEPENDS: "-Ur checkout/requirements.txt"
+  PLAT: x86_64
+  UNICODE_WIDTH: 32
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  MANYLINUX_VERSION: 2014
+
+jobs:
+- job: "sdist"
+  pool:
+    vmImage: 'ubuntu-20.04'
+  variables:
+    python.version: '3.8'
+    CC: gcc-9
+    CXX: g++-9
+  steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+      architecture: 'x64'
+
+  # This is messy, but the most convenient way to turn a JSON file into env
+  # variables without requiring extra dependencies. The "##vso" stuff makes the
+  # variables available to later steps.
+  #
+  # We're also setting py35 as an output variable to be used in the next
+  # step and its build matrix. This lets us avoid having to add complex
+  # conditions to each build step (as there seems to be no convenient way to
+  # just skip the whole rest of the pipeline).
+  - bash: |
+      eval $(python -c "
+      import json; import sys
+      with open('build-spec.json') as f: spec = json.load(f)
+      release_id = spec.get('upload-to', {}).get('release-id', '').replace('/', '-')
+      build_py35 = spec.get('options', {}).get('py35', '')
+      skip_tests = spec.get('options', {}).get('skip_tests', '')
+      universal = spec.get('options', {}).get('universal', '')
+      build_constraints = spec.get('options', {}).get('build_constraints', '')
+      sys.stdout.write('BUILD_SPEC_CLONE_URL={}\n'.format(spec.get('clone-url')))
+      sys.stdout.write('BUILD_SPEC_COMMIT={}\n'.format(spec.get('commit')))
+      sys.stdout.write('BUILD_SPEC_PACKAGE_NAME={}\n'.format(spec.get('package-name')))
+      sys.stdout.write('BUILD_SPEC_RELEASE_ID={}\n'.format(release_id))
+      sys.stdout.write('BUILD_SPEC_PY35={}\n'.format(build_py35))
+      sys.stdout.write('BUILD_SPEC_SKIP_TESTS={}\n'.format(skip_tests))
+      sys.stdout.write('BUILD_SPEC_UNIVERSAL={}\n'.format(universal))
+      sys.stdout.write('BUILD_SPEC_BUILD_CONSTRAINTS={}\n'.format(build_constraints))")
+      echo "##vso[task.setvariable variable=clone_url]$BUILD_SPEC_CLONE_URL"
+      echo "##vso[task.setvariable variable=commit]$BUILD_SPEC_COMMIT"
+      echo "##vso[task.setvariable variable=package_name]$BUILD_SPEC_PACKAGE_NAME"
+      echo "##vso[task.setvariable variable=checkout]$REPO_DIR"
+      echo "##vso[task.setvariable variable=release_tag]$BUILD_SPEC_RELEASE_ID"
+      echo "##vso[task.setvariable variable=py35;isOutput=true]$BUILD_SPEC_PY35"
+      echo "##vso[task.setvariable variable=skip_tests;isOutput=true]$BUILD_SPEC_SKIP_TESTS"
+      echo "##vso[task.setvariable variable=universal;isOutput=true]$BUILD_SPEC_UNIVERSAL"
+      echo "##vso[task.setvariable variable=build_constraints;isOutput=true]$BUILD_SPEC_BUILD_CONSTRAINTS"
+    name: set_variables
+    displayName: 'Set variables'
+  - script: |
+      export CC=$(CC)
+      export CXX=$(CXX)
+      git clone $(clone_url) $(checkout)
+      cd $(checkout)
+      git checkout $(commit)
+      python -m pip install -U pip setuptools
+      python -m pip install -r requirements.txt
+      python setup.py sdist
+    displayName: 'Install and build sdist'
+  - script: |
+      cd $(checkout)
+      export CC=$(CC)
+      export CXX=$(CXX)
+      python -m pip install -U wheel
+      python setup.py bdist_wheel
+    displayName: 'Build universal wheel'
+    condition: eq(variables['set_variables.universal'], 'True')
+  - bash: |
+      cd $(Build.SourcesDirectory)/$(checkout)
+      SDIST=$(python -c "import os;print(os.listdir('./dist')[0])" 2>&1)
+      rm -rf $(package_name)
+      python -m pip freeze > installed.txt
+      python -m pip uninstall -y -r installed.txt
+      python -m pip install dist/$SDIST
+      pip install -r requirements.txt
+      python -m pytest --pyargs $(package_name)
+    condition: ne(variables['set_variables.skip_tests'], 'True')
+    displayName: 'Install from sdist & run tests'
+  - task: CopyFiles@2
+    inputs:
+      contents: '$(checkout)/dist/**'
+      targetFolder: $(Build.ArtifactStagingDirectory)
+      flattenFolders: true
+    displayName: 'Copy sdist'
+
+  - task: PublishBuildArtifacts@1
+    inputs:
+      pathtoPublish: $(Build.ArtifactStagingDirectory)
+      artifactName: '$(ARTIFACT_NAME)'
+    displayName: 'Publish sdist to artifacts'
+
+  - task: GitHubRelease@0
+    inputs:
+      gitHubConnection: '$(GH_CONNECTION)'
+      repositoryName: '$(Build.Repository.Name)'
+      action: 'edit'
+      tagSource: manual
+      tag: '$(release_tag)'
+      addChangeLog: false
+      assetUploadMode: replace
+      assets: '$(Build.ArtifactStagingDirectory)/*'
+    displayName: 'Upload to GitHub release'
+
+- job: 'wheels'
+  dependsOn: 'sdist'
+  condition: not(eq(dependencies.sdist.outputs['set_variables.universal'], 'True'))
+  continueOnError: true
+  strategy:
+    matrix:
+      Python35Linux:
+        imageName: 'ubuntu-16.04'
+        python.version: '3.5'
+        os: linux
+      Python35Windows:
+        imageName: 'vs2017-win2016'
+        python.version: '3.5'
+        os: win
+      Python36Linux:
+        imageName: 'ubuntu-16.04'
+        python.version: '3.6'
+        os: linux
+      Python36Windows:
+        imageName: 'vs2017-win2016'
+        python.version: '3.6'
+        os: win
+      Python36Mac:
+        imageName: 'macos-10.15'
+        python.version: '3.6'
+        os: osx
+      Python37Linux:
+        imageName: 'ubuntu-16.04'
+        python.version: '3.7'
+        os: linux
+      Python37Windows:
+        imageName: 'vs2017-win2016'
+        python.version: '3.7'
+        os: win
+      Python37Mac:
+        imageName: 'macos-10.15'
+        python.version: '3.7'
+        os: osx
+      Python38Linux:
+        imageName: 'ubuntu-16.04'
+        python.version: '3.8'
+        os: linux
+      Python38Windows:
+        imageName: 'vs2017-win2016'
+        python.version: '3.8'
+        os: win
+      Python38Mac:
+        imageName: 'macos-10.15'
+        python.version: '3.8'
+        os: osx
+      Python39Linux:
+        imageName: 'ubuntu-16.04'
+        python.version: '3.9'
+        os: linux
+      Python39Windows:
+        imageName: 'vs2017-win2016'
+        python.version: '3.9'
+        os: win
+      Python39Mac:
+        imageName: 'macos-10.15'
+        python.version: '3.9'
+        os: osx
+    maxParallel: 4
+  pool:
+    vmImage: $(imageName)
+  variables:
+    py35: $[ dependencies.sdist.outputs['set_variables.py35'] ]
+
+  steps:
+  # This could probably be done more elegantly. Comparison happens here so we
+  # can use the value of the py35 variable and assign a variable "active" that's
+  # available to all subsequent build steps in the pipeline
+  - bash: |
+      BUILD35=0; [ "$(py35)" == "True" ] && BUILD35=1
+      echo "Build Python 3.5:" $BUILD35
+      IS35=0; [ "$(python.version)" == "3.5" ] && IS35=1
+      echo "Is Python 3.5:" $IS35
+      ACTIVE=$(( IS35 && BUILD35 || ! IS35 ? 1 : 0 ))
+      echo "Build active:" $ACTIVE
+      echo "##vso[task.setvariable variable=active]$ACTIVE"
+    displayName: 'Set status'
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+      architecture: 'x64'
+    condition: eq(variables['active'], 1)
+
+  - script: git submodule update --init --recursive
+    condition: eq(variables['active'], 1)
+    displayName: 'Set up multibuild'
+
+  # This is gettext needed for envsubst on osx =/
+  - script: |
+      brew install gettext
+      brew link --force gettext
+    condition: and(eq(variables['os'], 'osx'), eq(variables['active'], 1))
+    displayName: 'Before install (Mac)'
+  - script: |
+      SET PATH=%PYTHON%;%PYTHON%\Scripts;%PATH%
+      python -m pip install -U pip setuptools wheel virtualenv
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1))
+    displayName: 'Before install (Windows)'
+  # This is messy, but the most convenient way to turn a JSON file into env
+  # variables without requiring extra dependencies. The "##vso" stuff makes the
+  # variables available to later steps.
+  - bash: |
+      eval $(python -c "
+      import json; import sys
+      with open('build-spec.json') as f: spec = json.load(f)
+      release_id = spec.get('upload-to', {}).get('release-id', '').replace('/', '-')
+      use_llvm = spec.get('options', {}).get('llvm', '')
+      build_constraints = spec.get('options', {}).get('build_constraints', '')
+      sys.stdout.write('BUILD_SPEC_CLONE_URL={}\n'.format(spec.get('clone-url')))
+      sys.stdout.write('BUILD_SPEC_COMMIT={}\n'.format(spec.get('commit')))
+      sys.stdout.write('BUILD_SPEC_PACKAGE_NAME={}\n'.format(spec.get('package-name')))
+      sys.stdout.write('BUILD_SPEC_RELEASE_ID={}\n'.format(release_id))
+      sys.stdout.write('BUILD_SPEC_LLVM={}\n'.format(use_llvm))
+      sys.stdout.write('BUILD_SPEC_BUILD_CONSTRAINTS={}\n'.format(build_constraints))")
+      echo "##vso[task.setvariable variable=clone_url]$BUILD_SPEC_CLONE_URL"
+      echo "##vso[task.setvariable variable=package_name]$BUILD_SPEC_PACKAGE_NAME"
+      echo "##vso[task.setvariable variable=commit]$BUILD_SPEC_COMMIT"
+      echo "##vso[task.setvariable variable=release_tag]$BUILD_SPEC_RELEASE_ID"
+      echo "##vso[task.setvariable variable=checkout]$REPO_DIR"
+      echo "##vso[task.setvariable variable=llvm]$BUILD_SPEC_LLVM"
+      echo "##vso[task.setvariable variable=build_constraints]$BUILD_SPEC_BUILD_CONSTRAINTS"
+      echo "##vso[build.updatebuildnumber]$BUILD_SPEC_RELEASE_ID"
+    condition: eq(variables['active'], 1)
+    displayName: 'Set variables'
+  - script: |
+      pip install virtualenv
+      git clone $(clone_url) $(checkout)
+      export BUILD_COMMIT=$(commit)
+      export PACKAGE_NAME=$(package_name)
+      cat config.sh.template | envsubst > config.sh
+    condition: and(or(eq(variables['os'], 'osx'), eq(variables['os'], 'linux')), eq(variables['active'], 1))
+    displayName: 'Install (Mac / Linux)'
+  # This is hard-coded in the Docker scripts for Linux
+  - task: CopyFiles@2
+    inputs:
+      contents: '/**'
+      targetFolder: $LINUX_TARGET
+    condition: and(eq(variables['os'], 'linux'), eq(variables['active'], 1))
+    displayName: 'Copy multibuild files (Linux)'
+
+  - script: |
+      export BUILD_DEPENDS="$BUILD_DEPENDS -c checkout/build-constraints.txt"
+    condition: and(or(eq(variables['os'], 'osx'), eq(variables['os'], 'linux')), eq(variables['active'], 1), eq(variables['build_constraints'], 'True'))
+    displayName: 'Set dependencies with constraints (Mac / Linux)'
+  - script: |
+      [ "$(build_constraints)" == "True" ] && export BUILD_DEPENDS="$BUILD_DEPENDS -c checkout/build-constraints.txt"
+      echo "BUILD_DEPENDS:" $(BUILD_DEPENDS)
+      export MB_ML_VER=$(MANYLINUX_VERSION)
+      export MB_PYTHON_VERSION=$(python.version)
+      export TRAVIS_PYTHON_VERSION=$(python.version)
+      export TRAVIS_OS_NAME=$(os)
+      export BUILD_COMMIT=$(commit)
+      source $(Build.SourcesDirectory)/multibuild/common_utils.sh
+      source $(Build.SourcesDirectory)/multibuild/travis_steps.sh
+      before_install
+      clean_code $(checkout) $(commit)
+      export CONFIG_PATH=$LINUX_TARGET/config.sh
+      export MULTIBUILD_DIR=multibuild
+      build_wheel $(checkout) $PLAT
+      install_run $PLAT
+    condition: and(or(eq(variables['os'], 'osx'), eq(variables['os'], 'linux')), eq(variables['active'], 1))
+    displayName: 'Build wheel (Mac / Linux)'
+  - script: choco install llvm
+    condition: and(eq(variables['os'], 'win'), eq(variables['llvm'], 'true'), eq(variables['active'], 1))
+    displayName: 'Install LLVM if needed (Windows)'
+
+  # The env variables are needed to compile things like Blis
+  - script: |
+      set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+      set "INCLUDE=%$VC_INCLUDEPATH%"
+      git clone $(clone_url) $(checkout)
+      cd $(checkout)
+      git checkout $(commit)
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1))
+    displayName: 'Check out and set up (Windows)'
+  - script: |
+      cd $(checkout)
+      python -m pip install -Ur requirements.txt
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1), eq(variables['build_constraints'], 'False'))
+    displayName: 'Install dependencies without constraints (Windows)'
+  - script: |
+      cd $(checkout)
+      python -m pip install -Ur requirements.txt -c build-constraints.txt
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1), eq(variables['build_constraints'], 'True'))
+    displayName: 'Install dependencies with constraints (Windows)'
+  # The env variables are needed to compile things like Blis
+  - script: |
+      cd $(checkout)
+      python setup.py bdist_wheel
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1))
+    displayName: 'Build wheel (Windows)'
+  # Temporary workaround, see: https://github.com/pypa/pip/issues/6951
+  - task: PythonScript@0
+    inputs:
+      scriptSource: inline
+      script: |
+        import os
+        wheel_file = os.listdir('./dist')[0]
+        wheel_path = os.path.join('./dist', wheel_file)
+        mod_wheel_path = wheel_path.replace("cp38m-win", "cp38-win")
+        mod_wheel_path = mod_wheel_path.replace("cp39m-win", "cp39-win")
+        os.rename(wheel_path, mod_wheel_path)
+        print(os.listdir('./dist'))
+      failOnStderr: true
+      workingDirectory: '$(Build.SourcesDirectory)/$(checkout)'
+    condition: and(eq(variables['os'], 'win'), or(eq(variables['python.version'], '3.8'), eq(variables['python.version'], '3.9')), eq(variables['active'], 1))
+    displayName: Fix wheel name (Windows, Python 3.8)
+
+  - bash: |
+      cd $(checkout)
+      WHEEL=$(python -c "import os;print(os.listdir('./dist')[0])" 2>&1)
+      pip install dist/$WHEEL
+      rm -rf $(package_name)
+      python -m pytest --pyargs $(package_name)
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1))
+    displayName: 'Test wheel (Windows)'
+  - task: CopyFiles@2
+    inputs:
+      contents: 'checkout/dist/**'
+      targetFolder: $(Build.ArtifactStagingDirectory)
+      flattenFolders: true
+    condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1))
+    displayName: 'Copy wheel (Windows)'
+
+  - task: CopyFiles@2
+    inputs:
+      contents: 'wheelhouse/**'
+      targetFolder: $(Build.ArtifactStagingDirectory)
+      flattenFolders: true
+    condition: and(or(eq(variables['os'], 'osx'), eq(variables['os'], 'linux')), eq(variables['active'], 1))
+    displayName: 'Copy wheel (Mac / Linux)'
+
+  - task: PublishBuildArtifacts@1
+    inputs:
+      pathtoPublish: $(Build.ArtifactStagingDirectory)
+      artifactName: '$(ARTIFACT_NAME)'
+    condition: eq(variables['active'], 1)
+    displayName: 'Publish artifact'
+
+  - task: GitHubRelease@0
+    inputs:
+      gitHubConnection: '$(GH_CONNECTION)'
+      repositoryName: '$(Build.Repository.Name)'
+      action: 'edit'
+      tagSource: manual
+      tag: '$(release_tag)'
+      addChangeLog: false
+      assetUploadMode: replace
+      assets: '$(Build.ArtifactStagingDirectory)/*'
+    condition: and(not(eq(variables['GH_CONNECTION'], 'false')), eq(variables['active'], 1))
+    displayName: 'Upload to GitHub release'
