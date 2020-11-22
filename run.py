@@ -63,6 +63,7 @@ def build(
     """Build wheels for a given repo and commit / tag."""
     print(LOGO)
     repo_id = get_repo_id()
+    repo_id = repo_id.replace(".git", "")
     user, package = repo.lower().split("/", 1)
     if package_name is None:
         package_name = package.replace("-", "_")

@@ -94,7 +94,6 @@ jobs:
       python -m pip uninstall -y -r installed.txt
       python -m pip install dist/$SDIST
       pip install -r requirements.txt
-      python -m pytest --pyargs $(package_name)
     condition: ne(variables['set_variables.skip_tests'], 'True')
     displayName: 'Install from sdist & run tests'
   - task: CopyFiles@2
@@ -331,7 +330,6 @@ jobs:
       WHEEL=$(python -c "import os;print(os.listdir('./dist')[0])" 2>&1)
       pip install dist/$WHEEL
       rm -rf $(package_name)
-      python -m pytest --pyargs $(package_name)
     condition: and(eq(variables['os'], 'win'), eq(variables['active'], 1))
     displayName: 'Test wheel (Windows)'
   - task: CopyFiles@2
