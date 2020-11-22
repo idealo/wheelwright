@@ -128,14 +128,6 @@ jobs:
   continueOnError: true
   strategy:
     matrix:
-      Python35Linux:
-        imageName: 'ubuntu-16.04'
-        python.version: '3.5'
-        os: linux
-      Python35Windows:
-        imageName: 'vs2017-win2016'
-        python.version: '3.5'
-        os: win
       Python36Linux:
         imageName: 'ubuntu-16.04'
         python.version: '3.6'
