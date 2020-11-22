@@ -2,12 +2,11 @@
 
 This repo is heavily based on [spaCy's Wheelwright](https://github.com/explosion/wheelwright) project. 
 We're currently using it to build wheels for our [imagededup](https://github.com/idealo/imagededup) library.
-The build repository integrates with [Travis CI](https://travis-ci.org) and [Appveyor](https://www.appveyor.com)
-and builds wheels for macOS, Linux and Windows. All wheels are available in the
-[releases](https://github.com/idealo/wheelwright/releases).
+The build repository integrates with [Azure Pipelines](https://azure.microsoft.com/de-de/services/devops/pipelines/) 
+and builds wheels for macOS, Linux and Windows. All wheels are available in 
+the [releases](https://github.com/idealo/wheelwright/releases).
 
-[![Travis](https://img.shields.io/badge/travis-view%20builds-green.svg?longCache=true&style=flat-square&logo=travis)](https://travis-ci.org/idealo/wheelwright/branches)
-[![Appveyor](https://img.shields.io/badge/appveyor-view%20builds-green.svg?longCache=true&style=flat-square&logo=appveyor)](https://ci.appveyor.com/project/datitran/wheelwright/history)
+[![Azure Pipelines](https://img.shields.io/badge/Azure%20Pipelines-view%20builds-green.svg?longCache=true&style=flat-square&logo=azure-pipelines)](https://dev.azure.com/axelspringerai/Public/_build?definitionId=4)
 
 ## Usage Guide
 
