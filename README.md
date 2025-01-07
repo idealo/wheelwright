@@ -1,5 +1,7 @@
 # Wheelwright
 
+This project is no longer actively maintained and has been archived on Jan 7, 2025.
+
 This repo is heavily based on [spaCy's Wheelwright](https://github.com/explosion/wheelwright) project. 
 We're currently using it to build wheels for our [imagededup](https://github.com/idealo/imagededup) library.
 The build repository integrates with [Azure Pipelines](https://azure.microsoft.com/de-de/services/devops/pipelines/) 
